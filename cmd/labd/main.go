@@ -14,12 +14,12 @@ import (
 	"syscall"
 	"time"
 
-	"db-problem-emulator/internal/lab"
-	"db-problem-emulator/internal/load"
-	"db-problem-emulator/internal/observe"
-	"db-problem-emulator/internal/server"
-	"db-problem-emulator/internal/term"
-	"db-problem-emulator/web"
+	"hot-table/internal/lab"
+	"hot-table/internal/load"
+	"hot-table/internal/observe"
+	"hot-table/internal/server"
+	"hot-table/internal/term"
+	"hot-table/web"
 )
 
 func main() {
@@ -49,15 +49,15 @@ func main() {
 	defer stop()
 
 	terminals := term.Handler{Dir: project}
-	terminals.KillAll() // psql sessions an earlier labd left behind
+	terminals.KillOrphans() // psql sessions of a labd that is gone
 
-	srv := server.New(l, gen, observe.New(*dsn, l.Table), ui, project)
+	srv := server.New(l, gen, observe.New(*dsn, l.Table, l.Watch), ui, project)
 	go srv.Run(ctx)
 	httpServer := &http.Server{Addr: *addr, Handler: srv}
 	go func() {
 		<-ctx.Done()
 		gen.Stop()
-		terminals.KillAll()
+		terminals.KillOwn()
 		shutdown, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		_ = httpServer.Shutdown(shutdown)

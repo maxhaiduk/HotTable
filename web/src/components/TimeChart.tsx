@@ -16,6 +16,8 @@ interface Props {
   format: (value: number) => string
   log?: boolean
   height?: number
+  // The least top of a linear scale, so an idle chart gets round ticks instead of 0, 0.5, 1.
+  floor?: number
 }
 
 const axis = {
@@ -26,7 +28,7 @@ const axis = {
 }
 
 // A live time series. The plot is created once and fed new data on every frame.
-export function TimeChart({ title, frames, series, format, log = false, height = 150 }: Props) {
+export function TimeChart({ title, frames, series, format, log = false, height = 150, floor = 1 }: Props) {
   const box = useRef<HTMLDivElement>(null)
   const plot = useRef<uPlot | null>(null)
   const latest = useRef({ frames, series })
@@ -45,7 +47,7 @@ export function TimeChart({ title, frames, series, format, log = false, height =
         x: { time: true },
         y: log
           ? { distr: 3, log: 10, range: (_u, _min, max) => [0.0005, Math.max(max || 1, 1) * 2] }
-          : { range: (_u, _min, max) => [0, Math.max(max || 0, 1) * 1.1] },
+          : { range: (_u, _min, max) => [0, Math.max(max || 0, floor) * 1.1] },
       },
       axes: [
         {

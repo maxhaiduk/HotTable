@@ -20,6 +20,11 @@ body,
   height: 100%;
 }
 
+/* Native scrollbars and form controls follow the dark page instead of staying white. */
+:root {
+  color-scheme: dark;
+}
+
 body {
   background: var(--color-ink);
   color: #cbd5e1;

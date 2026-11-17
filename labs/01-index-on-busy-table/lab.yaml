@@ -1,5 +1,7 @@
 title: Індекс на великій таблиці під навантаженням
 table: orders
+# Step 4 adds a partitioned copy; the panels show its locks and indexes, partitions included.
+watch: [orders_part]
 
 # Computed once when the load starts; the scripts use them as :name.
 vars:
@@ -25,3 +27,11 @@ load:
     stuck_after: 5s
     scripts:
       - {file: load/lookup.sql}
+  - name: write-part
+    # New orders in orders_part all land in this year's partition. The group runs once step 4
+    # has created the table and the load is started again.
+    requires: orders_part
+    workers: 2
+    rate: 50
+    scripts:
+      - {file: load/insert_part.sql}

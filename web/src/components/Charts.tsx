@@ -1,27 +1,40 @@
 import { useMemo } from 'react'
 import type { Frame } from '../types'
-import { bytes, duration } from '../format'
+import { bytes, duration, groupColor } from '../format'
 import { TimeChart, type Series } from './TimeChart'
 
 const group = (frame: Frame, name: string) => frame.load?.find((w) => w.group === name)
 const positive = (value: number | undefined) => (value && value > 0 ? value : null)
 
-export function Charts({ frames }: { frames: Frame[] }) {
+// One line per load group of the lab: lookup groups show their latency, the rest their throughput.
+export function Charts({ frames, groups }: { frames: Frame[]; groups: string[] }) {
+  const traffic = groups.filter((g) => g !== 'lookup')
   const throughput = useMemo<Series[]>(
-    () => [
-      { label: 'write/s', color: 'var(--color-write)', value: (f) => group(f, 'write')?.count ?? null },
-      { label: 'read/s', color: 'var(--color-read)', value: (f) => group(f, 'read')?.count ?? null },
-    ],
-    [],
+    () => traffic.map((g) => ({ label: `${g}/s`, color: groupColor(g), value: (f) => group(f, g)?.count ?? null })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [groups.join()],
   )
   const latency = useMemo<Series[]>(
     () => [
-      { label: 'write p99', color: 'var(--color-write)', value: (f) => positive(group(f, 'write')?.p99) },
-      { label: 'read p99', color: 'var(--color-read)', value: (f) => positive(group(f, 'read')?.p99) },
-      { label: 'write stuck', color: 'var(--color-stuck)', value: (f) => positive(group(f, 'write')?.stuck), dash: [4, 3] },
-      { label: 'lookup', color: 'var(--color-lookup)', value: (f) => positive(group(f, 'lookup')?.last) },
+      ...traffic.map((g) => ({
+        label: `${g} p99`,
+        color: groupColor(g),
+        value: (f: Frame) => positive(group(f, g)?.p99),
+      })),
+      ...traffic
+        .filter((g) => g.startsWith('write'))
+        .map((g) => ({
+          label: `${g} stuck`,
+          color: g === 'write' ? 'var(--color-stuck)' : '#fca5a5',
+          value: (f: Frame) => positive(group(f, g)?.stuck),
+          dash: [4, 3],
+        })),
+      ...(groups.includes('lookup')
+        ? [{ label: 'lookup', color: groupColor('lookup'), value: (f: Frame) => positive(group(f, 'lookup')?.last) }]
+        : []),
     ],
-    [],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [groups.join()],
   )
   const replication = useMemo<Series[]>(
     () => [
@@ -33,9 +46,15 @@ export function Charts({ frames }: { frames: Frame[] }) {
 
   return (
     <div className="grid grid-cols-1 gap-3 @4xl:grid-cols-3">
-      <TimeChart title="Пропускна здатність" frames={frames} series={throughput} format={(v) => `${Math.round(v)}/s`} />
+      <TimeChart
+        title="Пропускна здатність"
+        frames={frames}
+        series={throughput}
+        format={(v) => `${Math.round(v)}/s`}
+        floor={10}
+      />
       <TimeChart title="Затримка (лог. шкала)" frames={frames} series={latency} format={duration} log />
-      <TimeChart title="WAL і репліка" frames={frames} series={replication} format={bytes} />
+      <TimeChart title="WAL і репліка" frames={frames} series={replication} format={bytes} floor={1024} />
     </div>
   )
 }

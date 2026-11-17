@@ -8,8 +8,9 @@ import { PASTE_EVENT } from './Terminals'
 // Every line but the last runs as typed; the last one waits for the user's Enter.
 function Pre(props: ComponentPropsWithoutRef<'pre'>) {
   const child = (props.children as { props?: { className?: string; children?: unknown } } | undefined)?.props
-  const isSql = child?.className?.includes('language-sql')
   const code = String(child?.children ?? '').replace(/\n$/, '')
+  // A query with $1-style parameters shows what an application sends; psql cannot run it as is.
+  const isSql = child?.className?.includes('language-sql') && !/\$\d/.test(code)
   return (
     <div className="group relative">
       <pre {...props} />
@@ -34,10 +35,16 @@ function forUi(markdown: string): string {
     .replace(/<!-- ui\n([\s\S]*?)\n-->/g, '$1')
 }
 
+// Links lead out of the lab (mostly to the documentation), so they open next to it, not over it.
+function Link(props: ComponentPropsWithoutRef<'a'>) {
+  const external = /^https?:/.test(props.href ?? '')
+  return <a {...props} {...(external ? { target: '_blank', rel: 'noreferrer' } : {})} />
+}
+
 export function LabText({ markdown }: { markdown: string }) {
   return (
     <article className="lab-text prose prose-sm prose-invert max-w-none prose-headings:scroll-mt-4 prose-h1:text-xl prose-h2:mt-8 prose-h2:border-b prose-h2:border-line prose-h2:pb-1 prose-h2:text-base prose-h2:text-accent prose-a:text-accent prose-code:before:content-none prose-code:after:content-none prose-pre:border prose-pre:border-line prose-pre:bg-[#070b16] prose-th:text-slate-300 prose-td:align-top">
-      <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={{ pre: Pre }}>
+      <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={{ pre: Pre, a: Link }}>
         {forUi(markdown)}
       </Markdown>
     </article>

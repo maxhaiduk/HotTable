@@ -34,6 +34,7 @@ export interface LoadgenSessions {
 export interface Lock {
   pid: number
   app: string
+  relation: string
   mode: string
   granted: boolean
 }
@@ -54,6 +55,7 @@ export interface Build {
 
 export interface Index {
   name: string
+  table: string
   valid: boolean
   ready: boolean
   bytes: number
@@ -67,7 +69,15 @@ export interface Replica {
   lag_seconds: number
 }
 
+export interface TableStats {
+  rows: number
+  dead_rows: number
+  bytes: number
+}
+
 export interface DbState {
+  version: string
+  table: TableStats | null
   sessions: Session[] | null
   loadgen: LoadgenSessions[] | null
   locks: Lock[] | null
@@ -104,7 +114,8 @@ export interface LabInfo {
     id: string
     title: string
     table: string
-    load: { name: string; workers: number; rate?: number }[]
+    watch?: string[]
+    load: { name: string; workers: number; rate?: number; requires?: string }[]
   }
   readme: string
 }

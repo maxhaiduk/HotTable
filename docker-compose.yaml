@@ -1,4 +1,4 @@
-name: db-problem-emulator
+name: hot-table
 
 x-postgres: &postgres
   image: postgres:17
@@ -7,7 +7,7 @@ x-postgres: &postgres
   shm_size: 1g
 
 x-tools: &tools
-  image: db-problem-emulator/tools
+  image: hot-table/tools
   build:
     context: docker
     dockerfile: tools.Dockerfile

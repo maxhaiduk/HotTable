@@ -5,6 +5,7 @@ package observe
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -12,6 +13,10 @@ import (
 
 // State is one snapshot of the primary.
 type State struct {
+	// Version is the server's version, such as 17.12.
+	Version string `json:"version"`
+	// Table is the lab's table; nil until it exists.
+	Table    *Table    `json:"table"`
 	Sessions []Session `json:"sessions"`
 	Loadgen  []Loadgen `json:"loadgen"`
 	Locks    []Lock    `json:"locks"`
@@ -21,6 +26,17 @@ type State struct {
 	// WALRate is bytes of WAL written per second since the previous snapshot.
 	WALRate float64 `json:"wal_rate"`
 	Error   string  `json:"error,omitempty"`
+}
+
+// Table holds estimates about the lab's table. They come from the statistics system and the
+// catalog, never from the table itself: count(*) on millions of rows is a full scan, and a query
+// on the table would hang behind any lock the lab takes on it.
+type Table struct {
+	// Rows is pg_stat_user_tables.n_live_tup, kept up to date as transactions commit.
+	Rows     int64 `db:"rows" json:"rows"`
+	DeadRows int64 `db:"dead_rows" json:"dead_rows"`
+	// Bytes is pg_class.relpages, as of the last VACUUM, ANALYZE or index build.
+	Bytes int64 `db:"bytes" json:"bytes"`
 }
 
 // Session is a client session other than the load generator and labd itself.
@@ -43,12 +59,14 @@ type Loadgen struct {
 	BlockedBy     []int32 `db:"blocked_by" json:"blocked_by"`
 }
 
-// Lock is a lock on the lab's table, except the load generator's ordinary granted ones.
+// Lock is a lock on one of the lab's tables or their partitions,
+// except the load generator's ordinary granted ones.
 type Lock struct {
-	PID     int32  `db:"pid" json:"pid"`
-	App     string `db:"app" json:"app"`
-	Mode    string `db:"mode" json:"mode"`
-	Granted bool   `db:"granted" json:"granted"`
+	PID      int32  `db:"pid" json:"pid"`
+	App      string `db:"app" json:"app"`
+	Relation string `db:"relation" json:"relation"`
+	Mode     string `db:"mode" json:"mode"`
+	Granted  bool   `db:"granted" json:"granted"`
 }
 
 // Build is an index build in progress.
@@ -66,9 +84,10 @@ type Build struct {
 	Running      float64 `db:"running" json:"running"`
 }
 
-// Index is an index of the lab's table.
+// Index is an index of one of the lab's tables or their partitions.
 type Index struct {
 	Name       string `db:"name" json:"name"`
+	Table      string `db:"table_name" json:"table"`
 	Valid      bool   `db:"valid" json:"valid"`
 	Ready      bool   `db:"ready" json:"ready"`
 	Bytes      int64  `db:"bytes" json:"bytes"`
@@ -82,6 +101,14 @@ type Replica struct {
 	BehindBytes int64   `db:"behind_bytes" json:"behind_bytes"`
 	LagSeconds  float64 `db:"lag_seconds" json:"lag_seconds"`
 }
+
+const tableSQL = `
+SELECT coalesce(s.n_live_tup, 0) AS rows,
+       coalesce(s.n_dead_tup, 0) AS dead_rows,
+       c.relpages::bigint * current_setting('block_size')::bigint AS bytes
+FROM pg_class AS c
+LEFT JOIN pg_stat_user_tables AS s ON s.relid = c.oid
+WHERE c.oid = to_regclass($1)`
 
 const sessionsSQL = `
 SELECT pid,
@@ -113,14 +140,24 @@ WHERE application_name LIKE 'loadgen%'
 GROUP BY application_name
 ORDER BY application_name`
 
-const locksSQL = `
-SELECT l.pid, coalesce(a.application_name, '') AS app, l.mode, l.granted
+// labRelations is the lab's tables ($1, names) and their partitions, as far as they exist.
+const labRelations = `
+WITH lab AS (SELECT to_regclass(t) AS oid FROM unnest($1::text[]) AS t),
+rels AS (
+    SELECT oid FROM lab WHERE oid IS NOT NULL
+    UNION
+    SELECT i.inhrelid FROM pg_inherits AS i JOIN lab ON i.inhparent = lab.oid
+)`
+
+const locksSQL = labRelations + `
+SELECT l.pid, coalesce(a.application_name, '') AS app,
+       l.relation::regclass::text AS relation, l.mode, l.granted
 FROM pg_locks AS l
 JOIN pg_stat_activity AS a USING (pid)
 WHERE l.locktype = 'relation'
-  AND l.relation = to_regclass($1)
+  AND l.relation IN (SELECT oid FROM rels)
   AND (a.application_name NOT LIKE 'loadgen%' OR NOT l.granted)
-ORDER BY l.granted DESC, l.pid`
+ORDER BY l.granted DESC, relation, l.pid`
 
 const progressSQL = `
 SELECT p.pid, p.command, p.phase,
@@ -131,16 +168,18 @@ SELECT p.pid, p.command, p.phase,
 FROM pg_stat_progress_create_index AS p
 JOIN pg_stat_activity AS a USING (pid)`
 
-const indexesSQL = `
+const indexesSQL = labRelations + `
 SELECT c.relname AS name,
+       t.relname AS table_name,
        i.indisvalid AS valid,
        i.indisready AS ready,
        c.relpages::bigint * current_setting('block_size')::bigint AS bytes,
        pg_get_indexdef(i.indexrelid) AS definition
 FROM pg_index AS i
 JOIN pg_class AS c ON c.oid = i.indexrelid
-WHERE i.indrelid = to_regclass($1)
-ORDER BY c.relname`
+JOIN pg_class AS t ON t.oid = i.indrelid
+WHERE i.indrelid IN (SELECT oid FROM rels)
+ORDER BY t.relname, c.relname`
 
 const replicasSQL = `
 SELECT coalesce(application_name, '') AS name,
@@ -151,17 +190,19 @@ FROM pg_stat_replication`
 
 // Observer keeps one connection to the primary and takes snapshots through it.
 type Observer struct {
-	dsn   string
-	table string
-	conn  *pgx.Conn
+	dsn    string
+	table  string   // the lab's table, for its row estimate
+	tables []string // the table and the watched ones, for locks and indexes
+	conn   *pgx.Conn
 
+	version  string
 	walBytes float64
 	walAt    time.Time
 }
 
-// New prepares an observer of table; it connects on the first snapshot.
-func New(dsn, table string) *Observer {
-	return &Observer{dsn: dsn, table: table}
+// New prepares an observer of table and the watched ones; it connects on the first snapshot.
+func New(dsn, table string, watch []string) *Observer {
+	return &Observer{dsn: dsn, table: table, tables: append([]string{table}, watch...)}
 }
 
 // Snapshot returns the current state; a failure is reported in State.Error.
@@ -171,21 +212,27 @@ func (o *Observer) Snapshot(ctx context.Context) State {
 	if err := o.ensureConn(ctx); err != nil {
 		return State{Error: err.Error()}
 	}
-	var s State
-	var err error
+	s := State{Version: o.version}
+	tables, err := collect[Table](ctx, o.conn, tableSQL, o.table)
+	if err != nil {
+		return o.fail(err)
+	}
+	if len(tables) > 0 {
+		s.Table = &tables[0]
+	}
 	if s.Sessions, err = collect[Session](ctx, o.conn, sessionsSQL); err != nil {
 		return o.fail(err)
 	}
 	if s.Loadgen, err = collect[Loadgen](ctx, o.conn, loadgenSQL); err != nil {
 		return o.fail(err)
 	}
-	if s.Locks, err = collect[Lock](ctx, o.conn, locksSQL, o.table); err != nil {
+	if s.Locks, err = collect[Lock](ctx, o.conn, locksSQL, o.tables); err != nil {
 		return o.fail(err)
 	}
 	if s.Progress, err = collect[Build](ctx, o.conn, progressSQL); err != nil {
 		return o.fail(err)
 	}
-	if s.Indexes, err = collect[Index](ctx, o.conn, indexesSQL, o.table); err != nil {
+	if s.Indexes, err = collect[Index](ctx, o.conn, indexesSQL, o.tables); err != nil {
 		return o.fail(err)
 	}
 	if s.Replicas, err = collect[Replica](ctx, o.conn, replicasSQL); err != nil {
@@ -214,8 +261,12 @@ func (o *Observer) ensureConn(ctx context.Context) error {
 	cfg.RuntimeParams["application_name"] = "labd-observe"
 	cfg.RuntimeParams["lock_timeout"] = "500ms"
 	cfg.RuntimeParams["statement_timeout"] = "2s"
-	o.conn, err = pgx.ConnectConfig(ctx, cfg)
-	return err
+	if o.conn, err = pgx.ConnectConfig(ctx, cfg); err != nil {
+		return err
+	}
+	// The server reports its version on connect, e.g. "17.12 (Debian 17.12-1.pgdg13+1)".
+	o.version, _, _ = strings.Cut(o.conn.PgConn().ParameterStatus("server_version"), " ")
+	return nil
 }
 
 func (o *Observer) fail(err error) State {

@@ -17,7 +17,19 @@ export const PASTE_EVENT = 'lab:paste'
 let nextKey = 0
 const newTab = (target: Target, label: string): Tab => ({ key: `t${nextKey++}`, target, label })
 
-export function Terminals() {
+interface Props {
+  // Folded, the console is just its tab bar; the sessions keep running.
+  open: boolean
+  onToggleOpen: () => void
+  maximized: boolean
+  onToggleMaximize: () => void
+}
+
+const Kbd = ({ children }: { children: string }) => (
+  <kbd className="ml-1.5 rounded border border-line px-1 font-mono text-[10px] text-slate-600">{children}</kbd>
+)
+
+export function Terminals({ open, onToggleOpen, maximized, onToggleMaximize }: Props) {
   const [tabs, setTabs] = useState<Tab[]>(() => [newTab('primary', 'psql 1'), newTab('replica', 'replica')])
   const [active, setActive] = useState(tabs[0].key)
 
@@ -50,7 +62,10 @@ export function Terminals() {
             className={`flex items-center border-b-2 ${active === t.key ? 'border-accent' : 'border-transparent'}`}
           >
             <button
-              onClick={() => setActive(t.key)}
+              onClick={() => {
+                setActive(t.key)
+                if (!open) onToggleOpen()
+              }}
               className={`py-1.5 pr-1 pl-3 font-mono text-xs ${
                 active === t.key ? 'text-slate-100' : 'text-slate-500 hover:text-slate-300'
               }`}
@@ -84,17 +99,41 @@ export function Terminals() {
         >
           ⟳ нова сесія
         </button>
+        <button
+          onClick={onToggleMaximize}
+          className="px-2 py-1 text-xs text-slate-500 hover:text-slate-200"
+          title={maximized ? 'Повернути консоль на місце (Ctrl+Shift+X)' : 'Консоль на весь екран (Ctrl+Shift+X)'}
+        >
+          {maximized ? '⤡ на місце' : '⤢ на весь екран'}
+          <Kbd>Ctrl+Shift+X</Kbd>
+        </button>
+        <button
+          onClick={onToggleOpen}
+          className="px-2 py-1 text-xs text-slate-500 hover:text-slate-200"
+          title={open ? 'Згорнути консоль у рядок вкладок (Ctrl+`)' : 'Розгорнути консоль (Ctrl+`)'}
+        >
+          {open ? '▾ згорнути' : '▴ консоль'}
+          <Kbd>Ctrl+`</Kbd>
+        </button>
       </div>
-      <div className="relative min-h-0 flex-1">
+      {/* Clips xterm's own hidden scrollbar, which keeps the height of a terminal opened while folded. */}
+      <div className={`relative min-h-0 flex-1 overflow-hidden ${open ? '' : 'hidden'}`}>
         {tabs.map((t) => (
-          <TerminalView key={t.key} target={t.target} visible={active === t.key} />
+          <TerminalView key={t.key} target={t.target} visible={active === t.key} open={open} maximized={maximized} />
         ))}
       </div>
     </div>
   )
 }
 
-function TerminalView({ target, visible }: { target: Target; visible: boolean }) {
+interface ViewProps {
+  target: Target
+  visible: boolean
+  open: boolean
+  maximized: boolean
+}
+
+function TerminalView({ target, visible, open, maximized }: ViewProps) {
   const box = useRef<HTMLDivElement>(null)
   const fitRef = useRef<() => void>(() => {})
   const typeRef = useRef<(text: string) => void>(() => {})
@@ -118,7 +157,8 @@ function TerminalView({ target, visible }: { target: Target; visible: boolean })
     ws.binaryType = 'arraybuffer'
     const encoder = new TextEncoder()
     const resize = () => {
-      if (el.clientWidth === 0) return
+      // A hidden or folded terminal has no size; fitting it would shrink psql's screen to nothing.
+      if (el.clientWidth === 0 || el.clientHeight < 20) return
       fit.fit()
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ resize: [term.cols, term.rows] }))
     }
@@ -148,15 +188,24 @@ function TerminalView({ target, visible }: { target: Target; visible: boolean })
 
   useEffect(() => {
     if (!visible) return
-    fitRef.current()
-    termRef.current?.focus()
+    if (open) {
+      fitRef.current()
+      termRef.current?.focus()
+    }
     const paste = (e: Event) => {
       typeRef.current((e as CustomEvent<string>).detail)
       termRef.current?.focus()
     }
     window.addEventListener(PASTE_EVENT, paste)
     return () => window.removeEventListener(PASTE_EVENT, paste)
-  }, [visible])
+    // Resizing or unfolding the console moves the focus to a button; give it back to the terminal.
+  }, [visible, open, maximized])
 
-  return <div ref={box} className={`absolute inset-0 p-2 ${visible ? '' : 'invisible'}`} />
+  // The padding sits on the outer box: FitAddon sizes the terminal to its parent's height and would
+  // count a padding on that parent as room for one more row, pushing the last line out of view.
+  return (
+    <div className={`absolute inset-0 p-2 ${visible ? '' : 'invisible'}`}>
+      <div ref={box} className="h-full w-full" />
+    </div>
+  )
 }

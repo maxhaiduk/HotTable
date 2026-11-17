@@ -17,6 +17,8 @@ type Lab struct {
 	Title string `yaml:"title" json:"title"`
 	// Table is the table the lab is about: the locks and indexes panels watch it.
 	Table string `yaml:"table" json:"table"`
+	// Watch adds tables the panels show as well, each with its partitions.
+	Watch []string `yaml:"watch" json:"watch,omitempty"`
 	// Vars are computed once when the load starts, each by a query returning one integer.
 	Vars map[string]string `yaml:"vars" json:"-"`
 	Load []Group           `yaml:"load" json:"load"`
@@ -26,6 +28,8 @@ type Lab struct {
 type Group struct {
 	Name    string `yaml:"name" json:"name"`
 	Workers int    `yaml:"workers" json:"workers"`
+	// Requires names a table the group writes to; without it the group sits the run out.
+	Requires string `yaml:"requires" json:"requires,omitempty"`
 	// Rate is transactions per second per worker; Every is the pause between them instead.
 	Rate  float64       `yaml:"rate" json:"rate,omitempty"`
 	Every time.Duration `yaml:"every" json:"-"`

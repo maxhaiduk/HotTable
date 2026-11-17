@@ -17,10 +17,10 @@ import (
 
 	"github.com/coder/websocket"
 
-	"db-problem-emulator/internal/lab"
-	"db-problem-emulator/internal/load"
-	"db-problem-emulator/internal/observe"
-	"db-problem-emulator/internal/term"
+	"hot-table/internal/lab"
+	"hot-table/internal/load"
+	"hot-table/internal/observe"
+	"hot-table/internal/term"
 )
 
 // Frame is one second of the live stream.

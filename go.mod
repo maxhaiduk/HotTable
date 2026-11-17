@@ -1,4 +1,4 @@
-module db-problem-emulator
+module hot-table
 
 go 1.26
 

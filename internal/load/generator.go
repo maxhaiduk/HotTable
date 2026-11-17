@@ -12,7 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"db-problem-emulator/internal/lab"
+	"hot-table/internal/lab"
 )
 
 // Status says whether the load runs and how the current or latest run went.
@@ -34,6 +34,8 @@ type Generator struct {
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
 	last    []Summary
+	// active are the groups of the current run: those whose required table exists.
+	active []*group
 }
 
 type group struct {
@@ -68,11 +70,11 @@ func (g *Generator) Start(ctx context.Context) error {
 	if g.running {
 		return nil
 	}
-	vars, err := g.vars(ctx)
+	vars, active, err := g.prepare(ctx)
 	if err != nil {
 		return err
 	}
-	for _, grp := range g.groups {
+	for _, grp := range active {
 		for _, script := range grp.scripts {
 			if _, err := script.values(vars); err != nil {
 				return err
@@ -80,8 +82,9 @@ func (g *Generator) Start(ctx context.Context) error {
 		}
 		grp.stats = newStats()
 	}
+	g.active = active
 	runCtx, cancel := context.WithCancel(context.Background())
-	for _, grp := range g.groups {
+	for _, grp := range active {
 		for worker := range grp.cfg.Workers {
 			g.wg.Add(1)
 			go g.work(runCtx, grp, worker, vars)
@@ -126,39 +129,53 @@ func (g *Generator) Windows() []Window {
 		return nil
 	}
 	now := time.Now()
-	windows := make([]Window, 0, len(g.groups))
-	for _, grp := range g.groups {
+	windows := make([]Window, 0, len(g.active))
+	for _, grp := range g.active {
 		windows = append(windows, grp.stats.takeWindow(grp.cfg.Name, grp.cfg.StuckAfter, now))
 	}
 	return windows
 }
 
 func (g *Generator) summaries() []Summary {
-	summaries := make([]Summary, 0, len(g.groups))
-	for _, grp := range g.groups {
+	summaries := make([]Summary, 0, len(g.active))
+	for _, grp := range g.active {
 		summaries = append(summaries, grp.stats.summary(grp.cfg.Name))
 	}
 	return summaries
 }
 
-func (g *Generator) vars(ctx context.Context) (map[string]int64, error) {
+// prepare computes the lab's variables and picks the groups whose required tables exist.
+func (g *Generator) prepare(ctx context.Context) (map[string]int64, []*group, error) {
 	conn, err := pgx.Connect(ctx, g.dsn)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer conn.Close(context.Background())
 	vars := make(map[string]int64, len(g.lab.Vars))
 	for name, sql := range g.lab.Vars {
 		var value *int64
 		if err := conn.QueryRow(ctx, sql).Scan(&value); err != nil {
-			return nil, fmt.Errorf("variable %s: %w (are the lab's tables seeded? make seed)", name, err)
+			return nil, nil, fmt.Errorf("variable %s: %w (are the lab's tables seeded? make seed)", name, err)
 		}
 		if value == nil {
-			return nil, fmt.Errorf("variable %s is NULL: the lab's tables are empty (make seed)", name)
+			return nil, nil, fmt.Errorf("variable %s is NULL: the lab's tables are empty (make seed)", name)
 		}
 		vars[name] = *value
 	}
-	return vars, nil
+	active := make([]*group, 0, len(g.groups))
+	for _, grp := range g.groups {
+		if grp.cfg.Requires != "" {
+			var exists bool
+			if err := conn.QueryRow(ctx, "SELECT to_regclass($1) IS NOT NULL", grp.cfg.Requires).Scan(&exists); err != nil {
+				return nil, nil, err
+			}
+			if !exists {
+				continue
+			}
+		}
+		active = append(active, grp)
+	}
+	return vars, active, nil
 }
 
 func (g *Generator) work(ctx context.Context, grp *group, worker int, vars map[string]int64) {

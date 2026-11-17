@@ -18,10 +18,36 @@ export function bytes(n: number | null | undefined): string {
   return `${value.toFixed(value >= 100 || unit === 0 ? 0 : 1)} ${units[unit]}`
 }
 
-export const groupColor: Record<string, string> = {
+const groupColors: Record<string, string> = {
   write: 'var(--color-write)',
   read: 'var(--color-read)',
   lookup: 'var(--color-lookup)',
+  'write-part': '#fb923c',
+}
+const spareColors = ['#f472b6', '#facc15', '#38bdf8', '#a3e635']
+
+// A load group's color; groups a lab adds beyond the usual ones get spare colors by name.
+export function groupColor(group: string): string {
+  if (groupColors[group]) return groupColors[group]
+  let hash = 0
+  for (const ch of group) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0
+  return spareColors[hash % spareColors.length]
+}
+
+// PostgreSQL's documentation for the stand's major version, e.g. 17.12 → /docs/17/.
+export function docsUrl(version: string | undefined, page = ''): string {
+  const major = version?.split('.')[0]
+  return `https://www.postgresql.org/docs/${major && /^\d+$/.test(major) ? major : 'current'}/${page}`
+}
+
+export const docsPages = {
+  locks: 'view-pg-locks.html',
+  activity: 'monitoring-stats.html#MONITORING-PG-STAT-ACTIVITY-VIEW',
+  waitEvents: 'monitoring-stats.html#WAIT-EVENT-TABLE',
+  progress: 'progress-reporting.html#CREATE-INDEX-PROGRESS-REPORTING',
+  index: 'catalog-pg-index.html',
+  replication: 'monitoring-stats.html#MONITORING-PG-STAT-REPLICATION-VIEW',
+  tableStats: 'monitoring-stats.html#MONITORING-PG-STAT-ALL-TABLES-VIEW',
 }
 
 export function wsUrl(path: string): string {

@@ -7,10 +7,15 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
+	"regexp"
+	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/coder/websocket"
@@ -23,10 +28,17 @@ var Targets = map[string][]string{
 	"replica": {"-h", "replica"},
 }
 
-// markerVar tags each terminal's psql on its command line (psql -v labd_term=<id>), so that labd
-// can end it: stopping `docker compose exec` leaves the process inside the container running,
-// and an abandoned session could keep a transaction open for good.
+// markerVar tags each terminal's psql on its command line (psql -v labd_term=<labd pid>-<id>), so
+// that labd can end it: stopping `docker compose exec` leaves the process inside the container
+// running, and an abandoned session could keep a transaction open for good. The PID tells which
+// labd a session belongs to, so two of them can share one stand.
 const markerVar = "labd_term"
+
+var markerPID = regexp.MustCompile(markerVar + `=(\d+)-`)
+
+func ownPrefix(pid int) string {
+	return fmt.Sprintf("%s=%d-", markerVar, pid)
+}
 
 // Handler serves one terminal per WebSocket; ?target= picks the command.
 type Handler struct {
@@ -52,8 +64,8 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer ws.CloseNow()
 
-	marker := newMarker()
-	command := append([]string{"compose", "exec", "console", "psql", "-v", markerVar + "=" + marker}, args...)
+	marker := ownPrefix(os.Getpid()) + newMarker()
+	command := append([]string{"compose", "exec", "console", "psql", "-v", marker}, args...)
 	cmd := exec.Command("docker", command...)
 	cmd.Dir = h.Dir
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
@@ -66,7 +78,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 		_ = ptmx.Close()
-		h.kill(markerVar + "=" + marker)
+		h.kill(marker)
 	}()
 
 	ctx, cancel := context.WithCancel(r.Context())
@@ -108,9 +120,36 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// KillAll ends every terminal's psql, including those left over from an earlier labd.
-func (h Handler) KillAll() {
-	h.kill(markerVar + "=")
+// KillOwn ends the psql of every terminal this labd opened.
+func (h Handler) KillOwn() {
+	h.kill(ownPrefix(os.Getpid()))
+}
+
+// KillOrphans ends the psql sessions of labd processes that are gone, leaving live ones alone.
+func (h Handler) KillOrphans() {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "docker", "compose", "exec", "-T", "console", "ps", "-eo", "args")
+	cmd.Dir = h.Dir
+	out, err := cmd.Output()
+	if err != nil {
+		return
+	}
+	done := map[int]bool{}
+	for _, m := range markerPID.FindAllStringSubmatch(string(out), -1) {
+		pid, _ := strconv.Atoi(m[1])
+		if done[pid] || alive(pid) {
+			continue
+		}
+		done[pid] = true
+		h.kill(ownPrefix(pid))
+	}
+}
+
+// alive tells whether a process with this PID runs on this host; EPERM still means it exists.
+func alive(pid int) bool {
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 func (h Handler) kill(pattern string) {
