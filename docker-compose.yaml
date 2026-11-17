@@ -1,0 +1,76 @@
+name: db-problem-emulator
+
+x-postgres: &postgres
+  image: postgres:17
+  # A small server: index builds and rewrites take long enough to watch them happen.
+  cpus: 2
+  shm_size: 1g
+
+services:
+  primary:
+    <<: *postgres
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: lab
+    command: >
+      postgres
+      -c cluster_name=primary
+      -c shared_buffers=512MB
+      -c max_wal_size=4GB
+      -c max_parallel_maintenance_workers=0
+      -c max_parallel_workers_per_gather=0
+      -c log_lock_waits=on
+    ports:
+      - "55432:5432"
+    volumes:
+      - primary-data:/var/lib/postgresql/data
+      - ./docker/primary-init.sh:/docker-entrypoint-initdb.d/01-replication.sh:ro
+    healthcheck:
+      # Over TCP: the temporary server that runs the init scripts listens on the socket only.
+      test: pg_isready -h 127.0.0.1 -U postgres -d lab
+      interval: 2s
+      timeout: 3s
+      retries: 150
+
+  replica:
+    <<: *postgres
+    user: postgres
+    entrypoint: ["bash", "/replica-entrypoint.sh"]
+    environment:
+      PGUSER: replicator
+      PGPASSWORD: replicator
+    ports:
+      - "55433:5432"
+    volumes:
+      - replica-data:/var/lib/postgresql/data
+      - ./docker/replica-entrypoint.sh:/replica-entrypoint.sh:ro
+    depends_on:
+      primary:
+        condition: service_healthy
+    healthcheck:
+      test: pg_isready -h 127.0.0.1 -U postgres -d lab
+      interval: 2s
+      timeout: 3s
+      retries: 150
+
+  tools:
+    build:
+      context: docker
+      dockerfile: tools.Dockerfile
+    profiles: [tools]
+    environment:
+      PGHOST: primary
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: lab
+      PYTHONUNBUFFERED: "1"
+    working_dir: /lab
+    volumes:
+      - .:/lab:ro
+    depends_on:
+      primary:
+        condition: service_healthy
+
+volumes:
+  primary-data:
+  replica-data:
