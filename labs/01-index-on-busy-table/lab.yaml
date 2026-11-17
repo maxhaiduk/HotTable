@@ -1,0 +1,27 @@
+title: Індекс на великій таблиці під навантаженням
+table: orders
+
+# Computed once when the load starts; the scripts use them as :name.
+vars:
+  max_order_id: SELECT max(id) FROM orders
+  customers: SELECT max(id) FROM customers
+
+load:
+  - name: write
+    workers: 4
+    rate: 50
+    scripts:
+      - {file: load/update.sql, weight: 7}
+      - {file: load/insert.sql, weight: 3}
+  - name: read
+    workers: 4
+    rate: 50
+    scripts:
+      - {file: load/read.sql}
+  - name: lookup
+    workers: 1
+    every: 3s
+    # Without its index the lookup scans the whole table and normally takes a second or two.
+    stuck_after: 5s
+    scripts:
+      - {file: load/lookup.sql}

@@ -6,6 +6,24 @@ x-postgres: &postgres
   cpus: 2
   shm_size: 1g
 
+x-tools: &tools
+  image: db-problem-emulator/tools
+  build:
+    context: docker
+    dockerfile: tools.Dockerfile
+  environment:
+    PGHOST: primary
+    PGUSER: postgres
+    PGPASSWORD: postgres
+    PGDATABASE: lab
+    PYTHONUNBUFFERED: "1"
+  working_dir: /lab
+  volumes:
+    - .:/lab:ro
+  depends_on:
+    primary:
+      condition: service_healthy
+
 services:
   primary:
     <<: *postgres
@@ -53,23 +71,16 @@ services:
       timeout: 3s
       retries: 150
 
+  # One-off commands: make seed, load, watch, psql, check.
   tools:
-    build:
-      context: docker
-      dockerfile: tools.Dockerfile
+    <<: *tools
     profiles: [tools]
-    environment:
-      PGHOST: primary
-      PGUSER: postgres
-      PGPASSWORD: postgres
-      PGDATABASE: lab
-      PYTHONUNBUFFERED: "1"
-    working_dir: /lab
-    volumes:
-      - .:/lab:ro
-    depends_on:
-      primary:
-        condition: service_healthy
+
+  # Always-on shell for the web UI's terminals (labd runs psql here with docker compose exec).
+  console:
+    <<: *tools
+    command: sleep infinity
+    init: true
 
 volumes:
   primary-data:

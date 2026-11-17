@@ -66,7 +66,7 @@ def main():
         ok = check("primary", primary)
         ok = check("replica", replica) and ok
     print("\nГОТОВО: індекс на місці." if ok else "\nЩе не все.")
-    print("Не забудь критерій навантаження: у підсумку make load write err = 0 і write max < 10s.")
+    print("Не забудь критерій навантаження: у підсумку прогону write err = 0 і write max < 10s.")
     sys.exit(0 if ok else 1)
 
 

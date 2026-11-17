@@ -1,0 +1,54 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+@theme {
+  --font-sans: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --color-ink: #0b1120;
+  --color-panel: #111a2e;
+  --color-line: #1e2a44;
+  --color-accent: #a3e635;
+  --color-write: #60a5fa;
+  --color-read: #34d399;
+  --color-lookup: #c084fc;
+  --color-stuck: #f87171;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--color-ink);
+  color: #cbd5e1;
+}
+
+/* Spoilers in the lab text. */
+.lab-text details {
+  border: 1px solid var(--color-line);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.875rem;
+  background: rgb(17 26 46 / 0.7);
+  margin: 1rem 0;
+}
+.lab-text details[open] {
+  border-color: rgb(163 230 53 / 0.35);
+}
+.lab-text summary {
+  cursor: pointer;
+  color: var(--color-accent);
+  font-weight: 600;
+  user-select: none;
+}
+
+/* uPlot on a dark background. */
+.u-legend {
+  font-size: 11px;
+  color: #94a3b8;
+}
+.u-legend .u-marker {
+  width: 10px;
+  height: 3px;
+}
